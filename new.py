@@ -7,7 +7,8 @@ import numpy as np
 
 # ----------------- Model: Hopfield network and helpers -----------------
 
-IMG_SIZE = (64, 64)  # all images resized to this
+IMG_SIZE = (32, 32)       # internal pattern size
+PREVIEW_SIZE = (224, 224) # on-screen display size
 
 
 def sgn(z: np.ndarray) -> np.ndarray:
@@ -23,19 +24,26 @@ class HopfieldNetwork:
         self.W = np.zeros((n_units, n_units), dtype=float)
 
     def train_hebb(self, patterns: np.ndarray):
-        """
-        Train with Hebbian rule.
-        patterns: shape (n_patterns, n_units) with values -1 or +1.
-        """
+        """Classic Hebbian learning."""
         patterns = np.asarray(patterns, dtype=float)
         n_patterns, n_units = patterns.shape
         if n_units != self.n_units:
             raise ValueError("Pattern size does not match network size.")
 
-        # Hebbian learning: average outer product of patterns
         self.W = (patterns.T @ patterns) / n_patterns
+        np.fill_diagonal(self.W, 0.0)
 
-        # Remove self-connections
+    def train_pseudo_inverse(self, patterns: np.ndarray):
+        "Pseudo-inverse learning rule."
+        patterns = np.asarray(patterns, dtype=float)
+        P, N = patterns.shape
+        if N != self.n_units:
+            raise ValueError("Pattern size does not match network size.")
+
+        X = patterns             # P x N
+        G = X @ X.T              # P x P
+        G_inv = np.linalg.pinv(G)
+        self.W = X.T @ G_inv @ X # N x N
         np.fill_diagonal(self.W, 0.0)
 
     def energy(self, state: np.ndarray) -> float:
@@ -46,7 +54,6 @@ class HopfieldNetwork:
         """
         Recall from an initial pattern (synchronous update).
         pattern: 1D array length n_units, values -1/+1.
-        Returns (final_state, energy_list).
         """
         state = np.asarray(pattern, dtype=float).flatten()
         if state.size != self.n_units:
@@ -64,22 +71,14 @@ class HopfieldNetwork:
 
 
 def image_to_pattern(img_array: np.ndarray, threshold: float = 0.5) -> np.ndarray:
-    """
-    Convert grayscale image array to a Hopfield pattern (-1/+1).
-    img_array: 2D numpy array, 0-255.
-    threshold in [0,1] applied after normalization.
-    """
-    img = img_array.astype(float)
-    img = img / 255.0
+    """Convert grayscale image array to Hopfield pattern (-1/+1)."""
+    img = img_array.astype(float) / 255.0
     binary = np.where(img >= threshold, 1.0, -1.0)
     return binary.flatten()
 
 
 def pattern_to_image(pattern: np.ndarray, shape) -> np.ndarray:
-    """
-    Convert 1D pattern (-1/+1) back to 2D image 0-255.
-    shape: (H, W).
-    """
+    """Convert 1D pattern (-1/+1) back to 2D 0-255 image."""
     pattern = np.asarray(pattern, dtype=float).flatten()
     img = pattern.reshape(shape)
     img = (img + 1.0) / 2.0  # -1 -> 0, +1 -> 1
@@ -98,74 +97,75 @@ def hamming_distance(a: np.ndarray, b: np.ndarray) -> int:
     return int(np.sum(a != b))
 
 
-# ----------------- View/Controller: Tkinter GUI -----------------
+# UI
 
-class HopfieldAccessGUI:
+class HopfieldImageGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Hopfield Image Access Door")
+        self.root.title("Hopfield Image Recall")
 
         # Data state
-        self.patterns = None          # training patterns (N x n_units)
-        self.stored_patterns = None   # copy of patterns
-        self.labels = []              # filenames of training images
-        self.net = None               # HopfieldNetwork
-        self.test_pattern = None      # pattern from test image (no noise)
+        self.patterns = None
+        self.stored_patterns = None
+        self.labels = []
+        self.net = None
+        self.test_pattern = None
 
-        # UI
+        # Learning rule selector
+        self.learning_rule = tk.StringVar(value="hebb")
+
         self._build_ui()
-
-    
 
     def _build_ui(self):
         root = self.root
-        root.configure(bg="#0f172a")
+        root.configure(bg="#ffffff")
 
-        main = tk.Frame(root, bg="#020617", bd=1, relief=tk.SOLID)
+        main = tk.Frame(root, bg="#ffffff", bd=0)
         main.pack(padx=16, pady=16, fill=tk.BOTH, expand=True)
 
+        # Title
         title = tk.Label(
             main,
-            text="Hopfield Image Access Door",
-            bg="#020617",
-            fg="#e5e7eb",
-            font=("Segoe UI", 14, "bold")
+            text="Hopfield Image Recall",
+            bg="#ffffff",
+            fg="#111827",
+            font=("Segoe UI", 16, "bold")
         )
-        title.pack(anchor="w", padx=12, pady=(12, 2))
+        title.pack(pady=(4, 0))
 
         subtitle = tk.Label(
             main,
-            text="Train on authorized images, then test with a noisy image. Door opens only if the pattern matches.",
-            bg="#020617",
-            fg="#9ca3af",
-            font=("Segoe UI", 9)
+            text="Train on images, add noise, and see what the network recalls.",
+            bg="#ffffff",
+            fg="#4b5563",
+            font=("Segoe UI", 10)
         )
-        subtitle.pack(anchor="w", padx=12, pady=(0, 8))
+        subtitle.pack(pady=(0, 12))
 
         # Training section
         train_frame = tk.LabelFrame(
             main,
-            text="1. Training (Authorized Images)",
-            bg="#020617",
-            fg="#e5e7eb",
+            text="1. Training images",
+            bg="#ffffff",
+            fg="#111827",
             bd=1,
             relief=tk.SOLID,
             font=("Segoe UI", 9, "bold")
         )
-        train_frame.pack(fill=tk.X, padx=12, pady=(8, 4))
+        train_frame.pack(fill=tk.X, padx=40, pady=(4, 8))
 
-        train_inner = tk.Frame(train_frame, bg="#020617")
+        train_inner = tk.Frame(train_frame, bg="#ffffff")
         train_inner.pack(fill=tk.X, padx=8, pady=8)
 
         # Left: file selector
-        train_left = tk.Frame(train_inner, bg="#020617")
+        train_left = tk.Frame(train_inner, bg="#ffffff")
         train_left.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.train_files_label = tk.Label(
             train_left,
             text="No training images selected.",
-            bg="#020617",
-            fg="#9ca3af",
+            bg="#ffffff",
+            fg="#4b5563",
             font=("Segoe UI", 9)
         )
         self.train_files_label.pack(anchor="w")
@@ -184,9 +184,42 @@ class HopfieldAccessGUI:
         )
         btn_select_train.pack(anchor="w", pady=(4, 0))
 
-        # Right: train button
-        train_right = tk.Frame(train_inner, bg="#020617")
+        # Right: learning rule + train button
+        train_right = tk.Frame(train_inner, bg="#ffffff")
         train_right.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        rule_frame = tk.Frame(train_right, bg="#ffffff")
+        rule_frame.pack(anchor="e")
+
+        tk.Label(
+            rule_frame,
+            text="Learning rule:",
+            bg="#ffffff",
+            fg="#111827",
+            font=("Segoe UI", 9, "bold")
+        ).pack(side=tk.LEFT, padx=(0, 4))
+
+        tk.Radiobutton(
+            rule_frame,
+            text="Hebb",
+            variable=self.learning_rule,
+            value="hebb",
+            bg="#ffffff",
+            fg="#111827",
+            selectcolor="#e5e7eb",
+            font=("Segoe UI", 9)
+        ).pack(side=tk.LEFT)
+
+        tk.Radiobutton(
+            rule_frame,
+            text="Pseudo-inverse",
+            variable=self.learning_rule,
+            value="pseudo",
+            bg="#ffffff",
+            fg="#111827",
+            selectcolor="#e5e7eb",
+            font=("Segoe UI", 9)
+        ).pack(side=tk.LEFT, padx=(4, 0))
 
         self.btn_train = tk.Button(
             train_right,
@@ -200,49 +233,49 @@ class HopfieldAccessGUI:
             padx=10,
             pady=4
         )
-        self.btn_train.pack(anchor="e", pady=(0, 4))
+        self.btn_train.pack(anchor="e", pady=(6, 4))
 
         self.train_status = tk.Label(
             train_right,
             text="",
-            bg="#020617",
-            fg="#9ca3af",
+            bg="#ffffff",
+            fg="#4b5563",
             font=("Segoe UI", 8)
         )
         self.train_status.pack(anchor="e")
 
-        # Access attempt section
+        # Recall section
         access_frame = tk.LabelFrame(
             main,
-            text="2. Access Attempt",
-            bg="#020617",
-            fg="#e5e7eb",
+            text="2. Recall from noisy input",
+            bg="#ffffff",
+            fg="#111827",
             bd=1,
             relief=tk.SOLID,
             font=("Segoe UI", 9, "bold")
         )
-        access_frame.pack(fill=tk.BOTH, padx=12, pady=(8, 8), expand=True)
+        access_frame.pack(fill=tk.BOTH, padx=40, pady=(4, 8), expand=True)
 
-        access_inner = tk.Frame(access_frame, bg="#020617")
-        access_inner.pack(fill=tk.BOTH, padx=8, pady=8, expand=True)
+        access_inner = tk.Frame(access_frame, bg="#ffffff")
+        access_inner.pack(fill=tk.BOTH, padx=8, pady=12, expand=True)
 
         # Left column: controls
-        control_frame = tk.Frame(access_inner, bg="#020617")
-        control_frame.pack(side=tk.LEFT, fill=tk.Y)
+        control_frame = tk.Frame(access_inner, bg="#ffffff")
+        control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 16))
 
         tk.Label(
             control_frame,
             text="Test image:",
-            bg="#020617",
-            fg="#e5e7eb",
+            bg="#ffffff",
+            fg="#111827",
             font=("Segoe UI", 9, "bold")
         ).pack(anchor="w")
 
         self.test_file_label = tk.Label(
             control_frame,
             text="No test image selected.",
-            bg="#020617",
-            fg="#9ca3af",
+            bg="#ffffff",
+            fg="#4b5563",
             font=("Segoe UI", 9)
         )
         self.test_file_label.pack(anchor="w")
@@ -251,24 +284,23 @@ class HopfieldAccessGUI:
             control_frame,
             text="Select test image",
             command=self.select_test_image,
-            bg="#4b5563",
+            bg="#6b7280",
             fg="white",
-            activebackground="#374151",
+            activebackground="#4b5563",
             relief=tk.FLAT,
             font=("Segoe UI", 9),
             padx=10,
             pady=4
         )
-        btn_select_test.pack(anchor="w", pady=(4, 8))
+        btn_select_test.pack(anchor="w", pady=(4, 12))
 
-        # Noise slider
         tk.Label(
             control_frame,
             text="Noise level (% bits flipped):",
-            bg="#020617",
-            fg="#e5e7eb",
+            bg="#ffffff",
+            fg="#111827",
             font=("Segoe UI", 9, "bold")
-        ).pack(anchor="w", pady=(4, 0))
+        ).pack(anchor="w")
 
         self.noise_scale = tk.Scale(
             control_frame,
@@ -276,142 +308,71 @@ class HopfieldAccessGUI:
             to=60,
             orient=tk.HORIZONTAL,
             length=200,
-            bg="#020617",
-            fg="#e5e7eb",
-            troughcolor="#111827",
+            bg="#ffffff",
+            fg="#111827",
+            troughcolor="#e5e7eb",
             highlightthickness=0
         )
         self.noise_scale.set(0)
-        self.noise_scale.pack(anchor="w")
-
-        # Threshold slider
-        tk.Label(
-            control_frame,
-            text="Match threshold (% allowed difference):",
-            bg="#020617",
-            fg="#e5e7eb",
-            font=("Segoe UI", 9, "bold")
-        ).pack(anchor="w", pady=(4, 0))
-
-        self.threshold_scale = tk.Scale(
-            control_frame,
-            from_=0,
-            to=40,
-            orient=tk.HORIZONTAL,
-            length=200,
-            bg="#020617",
-            fg="#e5e7eb",
-            troughcolor="#111827",
-            highlightthickness=0
-        )
-        self.threshold_scale.set(10)
-        self.threshold_scale.pack(anchor="w")
+        self.noise_scale.pack(anchor="w", pady=(2, 8))
 
         self.btn_recall = tk.Button(
             control_frame,
-            text="Recall and check access",
+            text="Recall",
             command=self.recall_and_check,
             bg="#2563eb",
             fg="white",
             activebackground="#1d4ed8",
             relief=tk.FLAT,
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 9, "bold"),
             padx=10,
             pady=4,
             state=tk.DISABLED
         )
-        self.btn_recall.pack(anchor="w", pady=(8, 4))
+        self.btn_recall.pack(anchor="w", pady=(4, 4))
 
-        # Right column: door + images
-        right_panel = tk.Frame(access_inner, bg="#020617")
-        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(16, 0))
+        # Right: images (centered, bigger)
+        img_panel = tk.Frame(access_inner, bg="#ffffff")
+        img_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Door panel
-        door_frame = tk.Frame(right_panel, bg="#020617")
-        door_frame.pack(fill=tk.X)
-
-        tk.Label(
-            door_frame,
-            text="Access door:",
-            bg="#020617",
-            fg="#e5e7eb",
-            font=("Segoe UI", 9, "bold")
-        ).pack(anchor="w")
-
-        self.door_canvas = tk.Canvas(
-            door_frame,
-            width=160,
-            height=220,
-            bg="#020617",
-            highlightthickness=0
-        )
-        self.door_canvas.pack(anchor="w", pady=(4, 4))
-
-        # Draw door rectangle
-        self.door_rect = self.door_canvas.create_rectangle(
-            30, 20, 130, 200,
-            fill="#111827",
-            outline="#ef4444",
-            width=3
-        )
-        # Door knob
-        self.door_knob = self.door_canvas.create_oval(
-            110, 105, 120, 115,
-            fill="#ef4444",
-            outline=""
-        )
-        # Status text
-        self.door_text = self.door_canvas.create_text(
-            80, 210,
-            text="ACCESS DENIED",
-            fill="#fecaca",
-            font=("Segoe UI", 9, "bold")
-        )
-
-        # Images panel
-        img_panel = tk.Frame(right_panel, bg="#020617")
-        img_panel.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
-
-        # Noisy input image
-        noisy_frame = tk.Frame(img_panel, bg="#020617")
+        noisy_frame = tk.Frame(img_panel, bg="#ffffff")
         noisy_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         tk.Label(
             noisy_frame,
             text="Input (after noise)",
-            bg="#020617",
-            fg="#e5e7eb",
+            bg="#ffffff",
+            fg="#111827",
             font=("Segoe UI", 9, "bold")
-        ).pack(anchor="w")
+        ).pack()
 
-        self.noisy_label = tk.Label(noisy_frame, bg="#020617")
-        self.noisy_label.pack(pady=(4, 0))
+        self.noisy_label = tk.Label(noisy_frame, bg="#ffffff")
+        self.noisy_label.pack(pady=(6, 0))
 
-        # Recalled image
-        rec_frame = tk.Frame(img_panel, bg="#020617")
+        rec_frame = tk.Frame(img_panel, bg="#ffffff")
         rec_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         tk.Label(
             rec_frame,
             text="Recalled pattern",
-            bg="#020617",
-            fg="#e5e7eb",
+            bg="#ffffff",
+            fg="#111827",
             font=("Segoe UI", 9, "bold")
-        ).pack(anchor="w")
+        ).pack()
 
-        self.rec_label = tk.Label(rec_frame, bg="#020617")
-        self.rec_label.pack(pady=(4, 0))
+        self.rec_label = tk.Label(rec_frame, bg="#ffffff")
+        self.rec_label.pack(pady=(6, 0))
 
         # Status bar
         self.status_bar = tk.Label(
             main,
             text="",
-            bg="#020617",
-            fg="#9ca3af",
+            bg="#ffffff",
+            fg="#4b5563",
             font=("Segoe UI", 8),
             anchor="w"
         )
-        self.status_bar.pack(fill=tk.X, padx=12, pady=(8, 8))
+        self.status_bar.pack(fill=tk.X, padx=40, pady=(4, 0))
 
     # ----- Controller logic -----
 
@@ -450,14 +411,21 @@ class HopfieldAccessGUI:
         try:
             n_units = self.patterns.shape[1]
             self.net = HopfieldNetwork(n_units)
-            self.net.train_hebb(self.patterns)
+
+            if self.learning_rule.get() == "pseudo":
+                self.net.train_pseudo_inverse(self.patterns)
+                rule_name = "Pseudo-inverse"
+            else:
+                self.net.train_hebb(self.patterns)
+                rule_name = "Hebbian"
+
         except Exception as e:
             messagebox.showerror("Error", f"Training failed: {e}")
             return
 
-        self.train_status.config(text="Network trained.")
+        self.train_status.config(text=f"Network trained ({rule_name}).")
         self.status_bar.config(
-            text=f"Authorized labels: {', '.join(self.labels)}"
+            text=f"Stored labels: {', '.join(self.labels)}"
         )
         self.btn_recall.config(state=tk.NORMAL)
 
@@ -472,9 +440,8 @@ class HopfieldAccessGUI:
         arr = load_image_as_array(path)
         self.test_pattern = image_to_pattern(arr, threshold=0.5)
         self.test_file_label.config(text=os.path.basename(path))
-        self.status_bar.config(text="Test image loaded. Adjust noise/threshold, then recall.")
+        self.status_bar.config(text="Test image loaded. Adjust noise, then recall.")
 
-        # Show original (no noise) as noisy panel for now
         img_arr = pattern_to_image(self.test_pattern, IMG_SIZE)
         self._update_image_label(self.noisy_label, img_arr)
 
@@ -496,7 +463,6 @@ class HopfieldAccessGUI:
             mask = np.random.rand(n_units) < flip_prob
             pattern[mask] *= -1.0
 
-        # Show noisy input
         noisy_arr = pattern_to_image(pattern, IMG_SIZE)
         self._update_image_label(self.noisy_label, noisy_arr)
 
@@ -516,71 +482,24 @@ class HopfieldAccessGUI:
         closest_label = self.labels[closest_idx]
         closest_dist = dists[closest_idx]
 
-        # Threshold decision
-        threshold_percent = self.threshold_scale.get()
-        max_allowed_diff = int((threshold_percent / 100.0) * n_units)
-        access_granted = closest_dist <= max_allowed_diff
-
-        # Final energy
         final_energy = energies[-1] if energies else None
 
         info = [
             f"Closest label: {closest_label}",
-            f"Hamming distance: {closest_dist}",
-            f"Threshold: {threshold_percent}% ({max_allowed_diff} pixels)",
-            f"Access: {'GRANTED' if access_granted else 'DENIED'}"
+            f"Hamming distance: {closest_dist}"
         ]
-        if final_energy is not None:
-            info.append(f"Final energy: {final_energy:.2f}")
+        
 
         self.status_bar.config(text=" | ".join(info))
-        self._set_door_state(access_granted)
-
-    
 
     def _update_image_label(self, label_widget: tk.Label, img_array: np.ndarray):
-        img = Image.fromarray(img_array, mode="L").resize((128, 128))
+        img = Image.fromarray(img_array, mode="L").resize(PREVIEW_SIZE)
         photo = ImageTk.PhotoImage(img)
         label_widget.config(image=photo)
         label_widget.image = photo  # keep reference
 
-    def _set_door_state(self, access_granted: bool):
-        if access_granted:
-            # Door open / granted
-            self.door_canvas.itemconfig(
-                self.door_rect,
-                outline="#22c55e",
-                fill="#111827"
-            )
-            self.door_canvas.itemconfig(
-                self.door_knob,
-                fill="#bbf7d0"
-            )
-            self.door_canvas.itemconfig(
-                self.door_text,
-                text="ACCESS GRANTED",
-                fill="#bbf7d0"
-            )
-        else:
-            # Door closed / denied
-            self.door_canvas.itemconfig(
-                self.door_rect,
-                outline="#ef4444",
-                fill="#111827"
-            )
-            self.door_canvas.itemconfig(
-                self.door_knob,
-                fill="#ef4444"
-            )
-            self.door_canvas.itemconfig(
-                self.door_text,
-                text="ACCESS DENIED",
-                fill="#fecaca"
-            )
-
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = HopfieldAccessGUI(root)
+    app = HopfieldImageGUI(root)
     root.mainloop()
-      
